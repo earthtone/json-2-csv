@@ -25,14 +25,14 @@ const Csv2Json = function(options) {
 
     /**
      * Generate the JSON heading from the CSV
-     * @param lines {Array<String>} csv lines split by EOL delimiter
+     * @param lines {String[]} csv lines split by EOL delimiter
      * @returns {*}
      */
     function retrieveHeading(lines) {
         let params = {lines},
             // Generate and return the heading keys
             headerRow = params.lines[0];
-        params.headerFields = splitLine(headerRow).map((headerKey, index) => ({
+        params.headerFields = headerRow.map((headerKey, index) => ({
             value: trimHeaderKey(headerKey),
             index: index
         }));
@@ -51,7 +51,7 @@ const Csv2Json = function(options) {
      * @returns {Promise.<String[]>}
      */
     function splitCsvLines(csv) {
-        return Promise.resolve(csv.split(options.delimiter.eol));
+        return Promise.resolve(splitLines(csv));
     }
 
     /**
@@ -68,15 +68,16 @@ const Csv2Json = function(options) {
 
     /**
      * Helper function that splits a line so that we can handle wrapped fields
-     * @param line
+     * @param csv
      */
-    function splitLine(line) {
+    function splitLines(csv) {
         // Parse out the line...
-        let splitLine = [],
+        let lines = [],
+            splitLine = [],
             character,
             charBefore,
             charAfter,
-            lastCharacterIndex = line.length - 1,
+            lastCharacterIndex = csv.length - 1,
             stateVariables = {
                 insideWrapDelimiter: false,
                 parsingValue: true,
@@ -85,15 +86,17 @@ const Csv2Json = function(options) {
             index = 0;
 
         // Loop through each character in the line to identify where to split the values
-        while (index < line.length) {
+        while (index < csv.length) {
             // Current character
-            character = line[index];
+            character = csv[index];
             // Previous character
-            charBefore = index ? line[index - 1] : '';
+            charBefore = index ? csv[index - 1] : '';
             // Next character
-            charAfter = index < lastCharacterIndex ? line[index + 1] : '';
+            charAfter = index < lastCharacterIndex ? csv[index + 1] : '';
 
-            if (index === lastCharacterIndex && character === options.delimiter.field) {
+            console.log(false, character, stateVariables.insideWrapDelimiter, stateVariables.parsingValue, charBefore);
+            if (((character === options.delimiter.eol && !stateVariables.insideWrapDelimiter) ||
+                index === lastCharacterIndex) && charBefore === options.delimiter.field) {
                 // If we reached the end of the line and the current character is a field delimiter...
 
                 // Push the value for the field that we were parsing
@@ -103,18 +106,30 @@ const Csv2Json = function(options) {
                     stateVariables.startIndex === index
                         ? ''
                         // Otherwise there is a valid value, but we do not want to include the current character (field delimiter)
-                        : line.substring(stateVariables.startIndex, index)
+                        : csv.substring(stateVariables.startIndex, index)
                 );
 
                 // Since the last character is a comma, there's still an additional implied field value trailing the comma.
                 //   Since this value is empty, we push an extra empty value
                 splitLine.push('');
-            } else if (index === lastCharacterIndex) {
+
+                // Finally, push the split line values into the lines array and clear the split line
+                lines.push(splitLine);
+                splitLine = [];
+                stateVariables.startIndex = index + 1;
+            } else if ((character === options.delimiter.eol || index === lastCharacterIndex) && !stateVariables.insideWrapDelimiter) {
                 // Otherwise if we reached the end of the line (and current character is not a field delimiter)
 
+                let toIndex = index !== lastCharacterIndex ? index : undefined;
+
                 // Retrieve the remaining value and add it to the split line list of values
-                splitLine.push(line.substring(stateVariables.startIndex));
-            } else if (character === options.delimiter.wrap && index === 0) {
+                splitLine.push(csv.substring(stateVariables.startIndex, toIndex));
+
+                // Finally, push the split line values into the lines array and clear the split line
+                lines.push(splitLine);
+                splitLine = [];
+                stateVariables.startIndex = index + 1;
+            } else if (character === options.delimiter.wrap && (index === 0 || charBefore === options.delimiter.eol)) {
                 // If the line starts with a wrap delimiter (ie. "*)
 
                 stateVariables.insideWrapDelimiter = true;
@@ -123,7 +138,7 @@ const Csv2Json = function(options) {
             } else if (character === options.delimiter.wrap && charAfter === options.delimiter.field) {
                 // If we reached a wrap delimiter with a field delimiter after it (ie. *",)
 
-                splitLine.push(line.substring(stateVariables.startIndex, index + 1));
+                splitLine.push(csv.substring(stateVariables.startIndex, index + 1));
                 stateVariables.startIndex = index + 2; // next value starts after the field delimiter
                 stateVariables.insideWrapDelimiter = false;
                 stateVariables.parsingValue = false;
@@ -131,7 +146,7 @@ const Csv2Json = function(options) {
                 !stateVariables.insideWrapDelimiter && stateVariables.parsingValue) {
                 // If we reached a wrap delimiter with a field delimiter after it (ie. ,"*)
 
-                splitLine.push(line.substring(stateVariables.startIndex, index - 1));
+                splitLine.push(csv.substring(stateVariables.startIndex, index - 1));
                 stateVariables.insideWrapDelimiter = true;
                 stateVariables.parsingValue = true;
                 stateVariables.startIndex = index;
@@ -145,7 +160,7 @@ const Csv2Json = function(options) {
                 stateVariables.parsingValue) {
                 // If we reached a field delimiter and are not inside the wrap delimiters (ie. *,*)
 
-                splitLine.push(line.substring(stateVariables.startIndex, index));
+                splitLine.push(csv.substring(stateVariables.startIndex, index));
                 stateVariables.startIndex = index + 1;
             } else if (character === options.delimiter.field && charBefore === options.delimiter.wrap &&
                 charAfter !== options.delimiter.wrap && !stateVariables.parsingValue) {
@@ -160,7 +175,7 @@ const Csv2Json = function(options) {
             index++;
         }
 
-        return splitLine;
+        return lines;
     }
 
     /**
@@ -276,8 +291,8 @@ const Csv2Json = function(options) {
                 return generatedJsonObjects;
             }
 
-            // Split the line using the given field delimiter after trimming whitespace
-            line = splitLine(line).map((fieldValue) => {
+            line = line.map((fieldValue) => {
+                // Perform the necessary operations on each line
                 fieldValue = removeWrapDelimitersFromValue(fieldValue);
                 fieldValue = unescapeWrapDelimiterInField(fieldValue);
                 fieldValue = trimRecordValue(fieldValue);
